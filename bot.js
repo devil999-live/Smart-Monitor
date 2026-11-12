@@ -3,10 +3,40 @@ const TelegramBot = require('node-telegram-bot-api');
 const User = require('./models/User');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
-const bot = new TelegramBot(token, { polling: true });
+
+if (!token) {
+    console.error("ERROR: TELEGRAM_BOT_TOKEN is missing in environment variables!");
+    process.exit(1);
+}
+
+// Initialize bot with robust polling options to prevent network crashes
+const bot = new TelegramBot(token, { 
+    polling: {
+        interval: 2000,       // Poll every 2 seconds to avoid rate limits
+        autoStart: true,
+        params: {
+            timeout: 10
+        }
+    } 
+});
+
+// CRITICAL FIX: Clear any stuck webhooks on startup to resolve 409 Conflict errors
+bot.deleteWebHook().then(() => {
+    console.log("Telegram webhook cleared successfully. Polling is active.");
+}).catch((err) => {
+    console.error("Webhook clearance notice:", err.message);
+});
+
+// Gracefully handle polling errors so the server doesn't crash on network flickers
+bot.on('polling_error', (error) => {
+    if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) {
+        console.warn("Polling conflict detected: Another instance is running. Make sure local scripts are closed.");
+    } else {
+        console.error(`Telegram Polling Notice [${error.code || 'UNKNOWN'}]: ${error.message}`);
+    }
+});
 
 console.log('Smart Monitor Telegram Bot is running and listening for commands...');
-// ... rest of your bot commands
 
 // 1. /start Command
 bot.onText(/\/start/, async (msg) => {
