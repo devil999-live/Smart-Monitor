@@ -3,6 +3,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const User = require('./models/User');
+const { pendingCommands } = require('./queue');
 
 // Import and start the Telegram bot listener
 require('./bot');
@@ -29,7 +30,7 @@ app.post('/api/link-chat', async (req, res) => {
     const updatedUser = await User.findOneAndUpdate(
       { deviceId },
       { chatId },
-      { new: true, upsert: true }
+      { upsert: true, returnDocument: 'after' }
     );
 
     res.status(200).json({ success: true, message: 'Smart Monitor successfully linked to Telegram!', user: updatedUser });
@@ -39,7 +40,39 @@ app.post('/api/link-chat', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
+// API Endpoint: Android App polls for pending commands
+app.get('/api/get-command', (req, res) => {
+  const { deviceId } = req.query;
+  if (!deviceId) return res.status(400).json({ error: 'Missing deviceId' });
+
+  const command = pendingCommands[deviceId] || null;
+  if (command) {
+    delete pendingCommands[deviceId]; // Clear command after polling so it executes only once
+  }
+  res.json({ command });
+});
+
+// API Endpoint: Android App posts execution results back to Telegram
+app.post('/api/post-result', async (req, res) => {
+  const { deviceId, result } = req.body;
+  if (!deviceId || !result) return res.status(400).json({ error: 'Missing parameters' });
+
+  try {
+    const user = await User.findOne({ deviceId });
+    if (user && user.chatId) {
+      const bot = require('./bot');
+      bot.sendMessage(user.chatId, `📱 **Device Report:**\n\n${result}`, { parse_mode: 'Markdown' });
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: 'Linked Telegram chat not found for this device' });
+    }
+  } catch (err) {
+    console.error('Error posting result:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Smart Monitor backend running on port ${PORT}`);
 });
